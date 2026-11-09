@@ -1,0 +1,104 @@
+{
+  "projet": "souverainrecrut",
+  "serveur": "SonarQube Community Build 26.10",
+  "quality_gate": {
+    "statut": "OK",
+    "conditions": [
+      {
+        "status": "OK",
+        "metricKey": "new_coverage",
+        "comparator": "LT",
+        "errorThreshold": "80",
+        "actualValue": "96.6"
+      },
+      {
+        "status": "OK",
+        "metricKey": "new_duplicated_lines_density",
+        "comparator": "GT",
+        "errorThreshold": "3",
+        "actualValue": "0.0"
+      },
+      {
+        "status": "OK",
+        "metricKey": "new_violations",
+        "comparator": "GT",
+        "errorThreshold": "0",
+        "actualValue": "0"
+      }
+    ]
+  },
+  "metriques": {
+    "coverage": "92.6",
+    "duplicated_lines_density": "0.0",
+    "software_quality_security_rating": "2.0",
+    "software_quality_security_issues": "2",
+    "security_hotspots": "0",
+    "lines_to_cover": "479",
+    "software_quality_reliability_issues": "2",
+    "branch_coverage": "76.9",
+    "duplicated_blocks": "0",
+    "ncloc": "1972",
+    "software_quality_maintainability_issues": "2",
+    "software_quality_reliability_rating": "3.0",
+    "line_coverage": "94.8",
+    "software_quality_maintainability_rating": "1.0"
+  },
+  "issues_ouvertes": [
+    {
+      "regle": "docker:S6471",
+      "fichier": "backend/Dockerfile",
+      "ligne": 11,
+      "message": "The \"node\" image runs with \"root\" as the default user. Make sure it is safe here.",
+      "impacts": [
+        {
+          "qualite": "SECURITY",
+          "severite": "LOW"
+        }
+      ]
+    },
+    {
+      "regle": "typescript:S5689",
+      "fichier": "backend/src/app.ts",
+      "ligne": 15,
+      "message": "This framework implicitly discloses version information by default. Make sure it is safe here.",
+      "impacts": [
+        {
+          "qualite": "SECURITY",
+          "severite": "LOW"
+        }
+      ]
+    },
+    {
+      "regle": "typescript:S7773",
+      "fichier": "backend/src/utils/pagination.ts",
+      "ligne": 28,
+      "message": "Prefer `Number.parseInt` over `parseInt`.",
+      "impacts": [
+        {
+          "qualite": "RELIABILITY",
+          "severite": "MEDIUM"
+        },
+        {
+          "qualite": "MAINTAINABILITY",
+          "severite": "LOW"
+        }
+      ]
+    },
+    {
+      "regle": "typescript:S7773",
+      "fichier": "backend/src/utils/pagination.ts",
+      "ligne": 31,
+      "message": "Prefer `Number.parseInt` over `parseInt`.",
+      "impacts": [
+        {
+          "qualite": "RELIABILITY",
+          "severite": "MEDIUM"
+        },
+        {
+          "qualite": "MAINTAINABILITY",
+          "severite": "LOW"
+        }
+      ]
+    }
+  ]
+}
