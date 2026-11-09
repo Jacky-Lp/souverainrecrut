@@ -9,6 +9,7 @@ pipeline {
         // Trivy épinglé par digest (recommandation : ne pas utiliser "latest").
         TRIVY_IMAGE       = 'aquasec/trivy:0.74.0@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969'
         IMAGE_NAME        = 'souverainrecrut-backend'
+        IMAGE_PLATFORM    = 'linux/amd64'
         IMAGE_TAG         = "${BUILD_NUMBER}"
     }
 
@@ -66,8 +67,11 @@ pipeline {
 
         stage('Docker Build') {
             steps {
+                // Image construite pour l'architecture du serveur de déploiement (amd64),
+                // même si Jenkins tourne sur un Mac ARM (buildx, avec émulation).
                 sh '''
-                    docker build -t "$IMAGE_NAME:$IMAGE_TAG" -t "$IMAGE_NAME:latest" backend
+                    docker buildx build --platform "$IMAGE_PLATFORM" --load --provenance=false --sbom=false \
+                        -t "$IMAGE_NAME:$IMAGE_TAG" -t "$IMAGE_NAME:latest" backend
                 '''
             }
         }
