@@ -14,7 +14,8 @@ beforeEach(() => {
 });
 
 describe("Auth", () => {
-  it("POST /auth/login retourne un token", async () => {
+  it("POST /auth/login retourne un token et l'utilisateur sans mot de passe", async () => {
+    // Arrange
     db.user.findUnique.mockResolvedValue({
       id: "u1",
       email: "a@b.co",
@@ -22,52 +23,107 @@ describe("Auth", () => {
       password: await bcrypt.hash("password123", 4),
     });
 
+    // Act
     const res = await request(app)
       .post("/v1/auth/login")
-      .send({ email: "a@b.co", password: "password123" })
-      .expect(200);
+      .send({ email: "a@b.co", password: "password123" });
 
+    // Assert
+    expect(res.status).toBe(200);
     expect(res.body.data.token).toEqual(expect.any(String));
     expect(res.body.data.user).not.toHaveProperty("password");
   });
 
   it("POST /auth/login refuse un email inconnu (401)", async () => {
+    // Arrange
     db.user.findUnique.mockResolvedValue(null);
-    await request(app).post("/v1/auth/login").send({ email: "x@y.z", password: "p" }).expect(401);
+
+    // Act
+    const res = await request(app)
+      .post("/v1/auth/login")
+      .send({ email: "x@y.z", password: "p" });
+
+    // Assert
+    expect(res.status).toBe(401);
   });
 
   it("POST /auth/login refuse un mauvais mot de passe (401)", async () => {
+    // Arrange
     db.user.findUnique.mockResolvedValue({
       id: "u1",
       role: "ADMIN",
       password: await bcrypt.hash("autre", 4),
     });
-    await request(app).post("/v1/auth/login").send({ email: "a@b.co", password: "nope" }).expect(401);
+
+    // Act
+    const res = await request(app)
+      .post("/v1/auth/login")
+      .send({ email: "a@b.co", password: "nope" });
+
+    // Assert
+    expect(res.status).toBe(401);
   });
 
   it("GET /auth/me retourne le profil", async () => {
+    // Arrange
     db.user.findUnique.mockResolvedValue({ id: "u1", email: "a@b.co" });
-    const res = await request(app).get("/v1/auth/me").set("Authorization", admin).expect(200);
+
+    // Act
+    const res = await request(app).get("/v1/auth/me").set("Authorization", admin);
+
+    // Assert
+    expect(res.status).toBe(200);
     expect(res.body.data.id).toBe("u1");
   });
 
-  it("GET /auth/me avec profil introuvable (404)", async () => {
+  it("GET /auth/me retourne 404 si le profil est introuvable", async () => {
+    // Arrange
     db.user.findUnique.mockResolvedValue(null);
-    await request(app).get("/v1/auth/me").set("Authorization", admin).expect(404);
+
+    // Act
+    const res = await request(app).get("/v1/auth/me").set("Authorization", admin);
+
+    // Assert
+    expect(res.status).toBe(404);
   });
 
-  it("rejette un en-tête Authorization invalide ou un token falsifié", async () => {
-    await request(app).get("/v1/auth/me").set("Authorization", "Basic abc").expect(401);
-    await request(app).get("/v1/auth/me").set("Authorization", "Bearer faux").expect(401);
+  it("rejette un schéma d'autorisation invalide (401)", async () => {
+    // Arrange
+    const header = "Basic abc";
+
+    // Act
+    const res = await request(app).get("/v1/auth/me").set("Authorization", header);
+
+    // Assert
+    expect(res.status).toBe(401);
+  });
+
+  it("rejette un token falsifié (401)", async () => {
+    // Arrange
+    const header = "Bearer faux";
+
+    // Act
+    const res = await request(app).get("/v1/auth/me").set("Authorization", header);
+
+    // Assert
+    expect(res.status).toBe(401);
   });
 });
 
 describe("Dashboard", () => {
   it("GET /dashboard/stats retourne les compteurs", async () => {
+    // Arrange
     for (const model of ["user", "candidate", "job", "application"]) {
       db[model].count.mockResolvedValue(2);
     }
-    const res = await request(app).get("/v1/dashboard/stats").set("Authorization", recruiter).expect(200);
+
+    // Act
+    const res = await request(app)
+      .get("/v1/dashboard/stats")
+      .set("Authorization", recruiter);
+
+    // Assert
+    expect(res.status).toBe(200);
     expect(res.body.data).toEqual({
       users: 2,
       candidates: 2,
@@ -80,42 +136,94 @@ describe("Dashboard", () => {
 
 describe("Santé, info et application", () => {
   it("GET /v1/health retourne UP", async () => {
-    const res = await request(app).get("/v1/health").expect(200);
+    // Arrange : aucune dépendance à préparer
+
+    // Act
+    const res = await request(app).get("/v1/health");
+
+    // Assert
+    expect(res.status).toBe(200);
     expect(res.body.data.status).toBe("UP");
   });
 
   it("GET /v1/ready retourne 200 si la base répond", async () => {
+    // Arrange
     db.$queryRaw.mockResolvedValue([1]);
-    await request(app).get("/v1/ready").expect(200);
+
+    // Act
+    const res = await request(app).get("/v1/ready");
+
+    // Assert
+    expect(res.status).toBe(200);
+    expect(res.body.data.status).toBe("READY");
   });
 
   it("GET /v1/ready retourne 503 si la base est indisponible", async () => {
+    // Arrange
     db.$queryRaw.mockRejectedValue(new Error("down"));
-    await request(app).get("/v1/ready").expect(503);
+
+    // Act
+    const res = await request(app).get("/v1/ready");
+
+    // Assert
+    expect(res.status).toBe(503);
+    expect(res.body.data.status).toBe("NOT_READY");
   });
 
   it("GET /v1/info retourne les informations de l'API", async () => {
-    const res = await request(app).get("/v1/info").expect(200);
+    // Arrange : aucune dépendance à préparer
+
+    // Act
+    const res = await request(app).get("/v1/info");
+
+    // Assert
+    expect(res.status).toBe(200);
     expect(res.body.data.name).toBe("SouverainRecrut API");
   });
 
   it("GET / retourne le message de bienvenue", async () => {
-    await request(app).get("/").expect(200);
+    // Arrange : aucune dépendance à préparer
+
+    // Act
+    const res = await request(app).get("/");
+
+    // Assert
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
   });
 
   it("GET /api-docs sert la documentation Swagger", async () => {
-    await request(app).get("/api-docs/").expect(200);
+    // Arrange : aucune dépendance à préparer
+
+    // Act
+    const res = await request(app).get("/api-docs/");
+
+    // Assert
+    expect(res.status).toBe(200);
   });
 
-  it("une route inconnue retourne 404", async () => {
-    await request(app).get("/inconnu").expect(404);
+  it("retourne 404 pour une route inconnue", async () => {
+    // Arrange : aucune dépendance à préparer
+
+    // Act
+    const res = await request(app).get("/inconnu");
+
+    // Assert
+    expect(res.status).toBe(404);
   });
 
-  it("une erreur inattendue retourne 500", async () => {
+  it("retourne 500 pour une erreur inattendue", async () => {
+    // Arrange
     const spy = jest.spyOn(console, "error").mockImplementation(() => undefined);
     db.job.findMany.mockRejectedValue(new Error("boom"));
     db.job.count.mockResolvedValue(0);
-    await request(app).get("/v1/jobs").set("Authorization", recruiter).expect(500);
+
+    // Act
+    const res = await request(app).get("/v1/jobs").set("Authorization", recruiter);
+
+    // Assert
+    expect(res.status).toBe(500);
+    expect(res.body.error.message).toBe("Erreur interne du serveur.");
     spy.mockRestore();
   });
 });
