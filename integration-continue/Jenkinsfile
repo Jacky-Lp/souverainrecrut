@@ -6,6 +6,10 @@ pipeline {
         JENKINS_CONTAINER = 'souverainrecrut-jenkins'
         NODE_IMAGE        = 'node:22-bookworm-slim'
         SCANNER_IMAGE     = 'sonarsource/sonar-scanner-cli:latest'
+        // Trivy épinglé par digest (recommandation : ne pas utiliser "latest").
+        TRIVY_IMAGE       = 'aquasec/trivy:0.74.0@sha256:62b1e65e8869bc4b4c6aa4fa2b21595256c7c2f6018a9d9ad61caf87187c1969'
+        IMAGE_NAME        = 'souverainrecrut-backend'
+        IMAGE_TAG         = "${BUILD_NUMBER}"
     }
 
     stages {
@@ -35,14 +39,86 @@ pipeline {
 
         stage('Quality') {
             steps {
+                // Le serveur et le token viennent de la configuration Jenkins (credential "sonar-token").
                 withSonarQubeEnv('SonarQube') {
                     sh '''
-                        docker run --rm --volumes-from "$JENKINS_CONTAINER" -w "$WORKSPACE" \
+                        docker run --rm -u 0:0 --volumes-from "$JENKINS_CONTAINER" -w "$WORKSPACE" \
                             -e SONAR_HOST_URL="$SONAR_HOST_URL" \
                             -e SONAR_TOKEN="$SONAR_AUTH_TOKEN" \
                             "$SCANNER_IMAGE" \
                             sonar-scanner -Dsonar.projectBaseDir="$WORKSPACE" \
+                                -Dsonar.working.directory="$WORKSPACE/.scannerwork" \
                                 -Dproject.settings=integration-continue/sonar/sonar-project.properties
+                    '''
+                }
+            }
+        }
+
+        stage('Quality Gate') {
+            steps {
+                // Attend le verdict envoyé par le webhook SonarQube (/sonarqube-webhook/).
+                // La pipeline échoue si le Quality Gate n'est pas "OK".
+                timeout(time: 5, unit: 'MINUTES') {
+                    waitForQualityGate abortPipeline: true
+                }
+            }
+        }
+
+        stage('Docker Build') {
+            steps {
+                sh '''
+                    docker build -t "$IMAGE_NAME:$IMAGE_TAG" -t "$IMAGE_NAME:latest" backend
+                '''
+            }
+        }
+
+        stage('Trivy Scan') {
+            steps {
+                // 1) Rapport complet (non bloquant), archivé dans reports/.
+                // 2) Seuil bloquant : échec si une vulnérabilité CRITICAL corrigeable est trouvée.
+                // --volumes-from fournit aussi le socket Docker du conteneur Jenkins à Trivy.
+                sh '''
+                    mkdir -p integration-continue/reports
+                    docker run --rm --volumes-from "$JENKINS_CONTAINER" -v trivy-cache:/root/.cache \
+                        -w "$WORKSPACE" "$TRIVY_IMAGE" image \
+                        --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 0 \
+                        --format json --output integration-continue/reports/trivy-report.json \
+                        "$IMAGE_NAME:$IMAGE_TAG"
+
+                    docker run --rm --volumes-from "$JENKINS_CONTAINER" -v trivy-cache:/root/.cache \
+                        "$TRIVY_IMAGE" image \
+                        --scanners vuln --severity CRITICAL --ignore-unfixed --exit-code 1 \
+                        "$IMAGE_NAME:$IMAGE_TAG"
+                '''
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'integration-continue/reports/trivy-report.json', allowEmptyArchive: true
+                }
+            }
+        }
+
+        stage('Publish') {
+            // Atteint uniquement si tous les stages précédents ont réussi.
+            when {
+                expression { currentBuild.currentResult == 'SUCCESS' }
+            }
+            steps {
+                // Credential Jenkins "dockerhub-credentials" (utilisateur + access token Docker Hub).
+                withCredentials([usernamePassword(credentialsId: 'dockerhub-credentials',
+                                                  usernameVariable: 'DOCKERHUB_USER',
+                                                  passwordVariable: 'DOCKERHUB_TOKEN')]) {
+                    sh '''
+                        # Session Docker temporaire : aucun identifiant n'est conservé après le push.
+                        export DOCKER_CONFIG="$(mktemp -d)"
+                        trap 'rm -rf "$DOCKER_CONFIG"' EXIT
+
+                        echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USER" --password-stdin
+
+                        docker tag "$IMAGE_NAME:$IMAGE_TAG" "$DOCKERHUB_USER/$IMAGE_NAME:$IMAGE_TAG"
+                        docker tag "$IMAGE_NAME:$IMAGE_TAG" "$DOCKERHUB_USER/$IMAGE_NAME:latest"
+                        docker push "$DOCKERHUB_USER/$IMAGE_NAME:$IMAGE_TAG"
+                        docker push "$DOCKERHUB_USER/$IMAGE_NAME:latest"
                     '''
                 }
             }
