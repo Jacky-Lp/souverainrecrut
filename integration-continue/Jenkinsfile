@@ -1,0 +1,56 @@
+pipeline {
+    agent any
+
+    environment {
+        // Conteneur Jenkins dont on réutilise le volume (workspace) dans les conteneurs de build.
+        JENKINS_CONTAINER = 'souverainrecrut-jenkins'
+        NODE_IMAGE        = 'node:22-bookworm-slim'
+        SCANNER_IMAGE     = 'sonarsource/sonar-scanner-cli:latest'
+    }
+
+    stages {
+        stage('Build') {
+            steps {
+                sh '''
+                    docker run --rm --volumes-from "$JENKINS_CONTAINER" -w "$WORKSPACE/backend" "$NODE_IMAGE" \
+                        sh -c "apt-get update -qq && apt-get install -y -qq openssl >/dev/null \
+                               && npm ci && npx prisma generate && npm run build"
+                '''
+            }
+        }
+
+        stage('Test') {
+            steps {
+                sh '''
+                    docker run --rm --volumes-from "$JENKINS_CONTAINER" -w "$WORKSPACE/backend" "$NODE_IMAGE" \
+                        npm test
+                '''
+            }
+            post {
+                always {
+                    archiveArtifacts artifacts: 'backend/coverage/**', allowEmptyArchive: true
+                }
+            }
+        }
+
+        stage('Quality') {
+            steps {
+                withSonarQubeEnv('SonarQube') {
+                    sh '''
+                        docker run --rm --volumes-from "$JENKINS_CONTAINER" -w "$WORKSPACE" \
+                            -e SONAR_HOST_URL="$SONAR_HOST_URL" \
+                            -e SONAR_TOKEN="$SONAR_AUTH_TOKEN" \
+                            "$SCANNER_IMAGE" \
+                            sonar-scanner -Dsonar.projectBaseDir="$WORKSPACE" \
+                                -Dproject.settings=integration-continue/sonar/sonar-project.properties
+                    '''
+                }
+            }
+        }
+    }
+
+    post {
+        success { echo 'Pipeline terminée avec succès' }
+        failure { echo 'Pipeline en échec' }
+    }
+}

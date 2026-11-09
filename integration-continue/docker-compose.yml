@@ -1,0 +1,18 @@
+name: jenkins
+
+services:
+  jenkins:
+    build: .
+    container_name: souverainrecrut-jenkins
+    # Root uniquement pour accéder au socket Docker de l'hôte (environnement local de TP).
+    user: root
+    ports:
+      - "8080:8080"
+      - "50000:50000"
+    volumes:
+      - jenkins_home:/var/jenkins_home
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
+
+volumes:
+  jenkins_home:
