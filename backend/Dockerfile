@@ -13,7 +13,10 @@ WORKDIR /app
 ENV NODE_ENV=production
 
 COPY package*.json ./
-RUN npm ci --only=production
+RUN npm ci --only=production \
+    # npm n'est plus nécessaire à l'exécution : on le retire (surface d'attaque réduite,
+    # et son "tar" embarqué n'est plus présent dans l'image finale).
+    && rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
 
 # Copie des fichiers nécessaires depuis le builder
 COPY --from=builder /app/dist ./dist
