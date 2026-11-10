@@ -1,0 +1,88 @@
+stages: [validate, deploy, verify]
+
+# Le pipeline de déploiement ne tourne que sur la branche main.
+workflow:
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+
+# Variables à définir dans GitLab (Settings > CI/CD > Variables), en "Masked" :
+#   TS_AUTHKEY (clé Tailscale éphémère), SSH_PRIVATE_KEY (type File), SERVER_TS_IP, SERVER_USER,
+#   DOCKERHUB_USER, DOCKERHUB_TOKEN, POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB, JWT_SECRET
+
+variables:
+  IMAGE_NAME: souverainrecrut-backend
+  API_PORT: "4000"
+  HEALTH_PATH: /v1/health
+  IMAGE_TAG:
+    value: "11"
+    description: "Tag de l'image backend à déployer (numéro de build Jenkins)"
+
+.tailscale_ssh: &tailscale_ssh
+  image: ubuntu:24.04
+  before_script:
+    - apt-get update -qq && apt-get install -y -qq curl openssh-client >/dev/null
+    - curl -fsSL https://tailscale.com/install.sh | sh >/dev/null
+    - tailscaled --tun=userspace-networking --socks5-server=localhost:1055 >/dev/null 2>&1 &
+    - sleep 3
+    - tailscale up --authkey="$TS_AUTHKEY" --hostname="gitlab-ci-$CI_JOB_ID"
+    - mkdir -p ~/.ssh && chmod 700 ~/.ssh
+    - cp "$SSH_PRIVATE_KEY" ~/.ssh/id_ed25519 && chmod 600 ~/.ssh/id_ed25519
+    - |
+      cat > ~/.ssh/config <<EOF
+      Host target
+        HostName $SERVER_TS_IP
+        User $SERVER_USER
+        StrictHostKeyChecking accept-new
+        ProxyCommand tailscale nc %h %p
+      EOF
+
+validate_tag:
+  stage: validate
+  image: curlimages/curl:8.11.1
+  script:
+    - test -n "$IMAGE_TAG" || (echo "IMAGE_TAG manquant" && exit 1)
+    - echo "$IMAGE_TAG" | grep -Eq '^[A-Za-z0-9._-]+$' || (echo "Tag invalide" && exit 1)
+    - test "$IMAGE_TAG" != "latest" || (echo "Le tag latest est interdit" && exit 1)
+    - curl -fsS "https://hub.docker.com/v2/repositories/$DOCKERHUB_USER/$IMAGE_NAME/tags/$IMAGE_TAG" >/dev/null
+        || (echo "Tag introuvable sur Docker Hub" && exit 1)
+
+deploy:
+  stage: deploy
+  <<: *tailscale_ssh
+  needs: [validate_tag]
+  when: manual
+  environment: production
+  script:
+    - ssh target "mkdir -p ~/deployment"
+    - scp deploiement/deployment/docker-compose.yml target:~/deployment/docker-compose.yml
+    - scp -r backend/prisma target:~/deployment/
+    - |
+      ssh target "umask 077 && cat > ~/deployment/.env" <<EOF
+      DOCKERHUB_USER=$DOCKERHUB_USER
+      IMAGE_NAME=$IMAGE_NAME
+      IMAGE_TAG=$IMAGE_TAG
+      POSTGRES_USER=$POSTGRES_USER
+      POSTGRES_PASSWORD=$POSTGRES_PASSWORD
+      POSTGRES_DB=$POSTGRES_DB
+      JWT_SECRET=$JWT_SECRET
+      API_PORT=$API_PORT
+      EOF
+    - echo "$DOCKERHUB_TOKEN" | ssh target "docker login -u $DOCKERHUB_USER --password-stdin"
+    - ssh target "cd ~/deployment && docker compose pull backend postgres"
+    - ssh target "cd ~/deployment && docker compose up -d postgres"
+    - ssh target "cd ~/deployment && docker compose --profile migrate run --rm migrate"
+    - ssh target "cd ~/deployment && docker compose up -d"
+
+verify:
+  stage: verify
+  <<: *tailscale_ssh
+  needs: [deploy]
+  script:
+    - ssh target "cd ~/deployment && docker compose ps"
+    - |
+      for i in $(seq 1 12); do
+        ssh target "curl -fsS http://localhost:$API_PORT$HEALTH_PATH" && exit 0
+        echo "API pas prête ($i/12)..."; sleep 5
+      done
+      ssh target "cd ~/deployment && docker compose logs --tail=50 backend"
+      exit 1

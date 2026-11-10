@@ -1,0 +1,90 @@
+---
+- name: Préparation du serveur SouverainRecrut
+  hosts: serveur
+  become: true
+
+  vars:
+    deploy_user: serveur
+    deploy_dir: "/home/serveur/deployment"
+
+  tasks:
+    - name: Rafraîchir le cache apt
+      ansible.builtin.apt:
+        update_cache: true
+      register: apt_update
+      retries: 3
+      delay: 5
+      until: apt_update is succeeded
+
+    - name: Mettre à jour les paquets
+      ansible.builtin.apt:
+        upgrade: safe
+      register: apt_upgrade
+      retries: 3
+      delay: 5
+      until: apt_upgrade is succeeded
+
+    - name: Installer les dépendances
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+          - curl
+          - gnupg
+        state: present
+
+    - name: Chercher le binaire Docker
+      ansible.builtin.stat:
+        path: /usr/bin/docker
+      register: docker_bin
+
+    - name: Installer Docker Engine et le plugin Compose si absents
+      ansible.builtin.apt:
+        name:
+          - docker.io
+          - docker-compose-v2
+        state: present
+      when: not docker_bin.stat.exists
+
+    - name: Activer et démarrer le service Docker
+      ansible.builtin.systemd:
+        name: docker
+        enabled: true
+        state: started
+
+    - name: Autoriser l'utilisateur de déploiement à utiliser Docker
+      ansible.builtin.user:
+        name: "{{ deploy_user }}"
+        groups: docker
+        append: true
+
+    - name: Créer le répertoire de déploiement
+      ansible.builtin.file:
+        path: "{{ deploy_dir }}"
+        state: directory
+        owner: "{{ deploy_user }}"
+        group: "{{ deploy_user }}"
+        mode: "0750"
+
+    - name: Vérifier la version de Docker
+      ansible.builtin.command: docker --version
+      register: docker_version
+      changed_when: false
+
+    - name: Vérifier la version de Docker Compose
+      ansible.builtin.command: docker compose version
+      register: compose_version
+      changed_when: false
+
+    - name: Vérifier que le service Docker est actif
+      ansible.builtin.command: systemctl is-active docker
+      register: docker_active
+      changed_when: false
+      failed_when: docker_active.stdout != 'active'
+
+    - name: Résumé
+      ansible.builtin.debug:
+        msg:
+          - "{{ docker_version.stdout }}"
+          - "{{ compose_version.stdout }}"
+          - "Service Docker : {{ docker_active.stdout }}"
+          - "Répertoire de déploiement : {{ deploy_dir }}"

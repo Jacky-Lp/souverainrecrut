@@ -1,0 +1,73 @@
+name: souverainrecrut
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - app
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Migrations Prisma : conteneur éphémère lancé à la demande (profil "migrate").
+  # Le CLI Prisma n'est pas dans l'image du backend, on le prend ici.
+  migrate:
+    image: node:22-bookworm-slim
+    profiles: ["migrate"]
+    working_dir: /work
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+    volumes:
+      - ./prisma:/work/prisma:ro
+    networks:
+      - app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: >
+      sh -c "apt-get update -qq && apt-get install -y -qq openssl >/dev/null
+      && npx --yes prisma@6.16.2 migrate deploy --schema prisma/schema.prisma"
+
+  backend:
+    image: ${DOCKERHUB_USER}/${IMAGE_NAME}:${IMAGE_TAG}
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: "4000"
+      API_VERSION: v1
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      JWT_SECRET: ${JWT_SECRET}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:5173}
+    ports:
+      - "${API_PORT:-4000}:4000"
+    networks:
+      - app
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:4000/v1/health >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+
+# Réseau et volume créés par Terraform.
+networks:
+  app:
+    external: true
+    name: souverainrecrut-net
+
+volumes:
+  postgres_data:
+    external: true
+    name: souverainrecrut-postgres-data
