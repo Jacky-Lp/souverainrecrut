@@ -43,6 +43,7 @@ validate_tag:
     - test -n "$IMAGE_TAG" || (echo "IMAGE_TAG manquant" && exit 1)
     - echo "$IMAGE_TAG" | grep -Eq '^[A-Za-z0-9._-]+$' || (echo "Tag invalide" && exit 1)
     - test "$IMAGE_TAG" != "latest" || (echo "Le tag latest est interdit" && exit 1)
+    - echo "Image verifiee ${DOCKERHUB_USER}/${IMAGE_NAME}:${IMAGE_TAG}"
     - curl -fsS "https://hub.docker.com/v2/repositories/$DOCKERHUB_USER/$IMAGE_NAME/tags/$IMAGE_TAG" >/dev/null
         || (echo "Tag introuvable sur Docker Hub" && exit 1)
 
