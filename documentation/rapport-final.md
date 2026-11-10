@@ -26,6 +26,8 @@ Je note ici les machines et les versions que j'ai utilisées, pour que tout puis
 | SonarQube | Community Build 26.10, dans Docker, port 9000 |
 | Trivy | 0.74.0, image épinglée par digest |
 | Node.js | 22 pour le build et les tests (conteneur `node:22-bookworm-slim`) ; le Dockerfile du backend part de `node:20-alpine` |
+| Terraform | 1.17.1, lancé depuis le Mac |
+| Ansible | core 2.21.6, lancé depuis le Mac |
 
 **Serveur de déploiement**
 
@@ -34,7 +36,7 @@ Je note ici les machines et les versions que j'ai utilisées, pour que tout puis
 | Système | Ubuntu 26.04.1 LTS |
 | Architecture | x86_64 (amd64) |
 | Ressources | 8 cœurs, 14 Go de RAM, 233 Go de disque (197 Go libres) |
-| Docker | 29.9.1, déjà installé |
+| Docker | déjà installé (29.9.1), passé en 29.9.3 par la mise à jour d'Ansible ; Compose v5.7.0 |
 | Accès | SSH, à travers Tailscale |
 
 ## Partie 1 : Intégration continue (jour 1)
@@ -182,4 +184,121 @@ Tout peut être rejoué à partir du dépôt :
 
 ## Partie 2 : Provisionnement et déploiement (jour 2)
 
-À compléter : serveur Ubuntu, Terraform, Ansible, projet GitLab et `.gitlab-ci.yml`, déploiement avec Docker Compose et PostgreSQL, vérification et rollback.
+### 1. Accès au serveur
+
+Le serveur n'est pas exposé sur internet. Je passe par Tailscale (VPN mesh), qui lui attribue une IP privée. les runners GitLab CI tournent sur gitlab.com : Ils accèdent au serveur via Tailscale.
+
+### 2. Terraform
+
+Terraform pilote le Docker du serveur **à distance**, en SSH, avec le provider `kreuzwerker/docker`. Il crée deux ressources persistantes sur le serveur :
+- un réseau Docker `souverainrecrut-net` (bridge)
+- un volume Docker `souverainrecrut-postgres-data`
+
+Il génère aussi l'inventaire Ansible (`deploiement/ansible/inventory.ini`) à partir des variables Terraform. Les valeurs propres à mon installation sont dans `terraform.tfvars`, exclu du dépôt. Il contient cinq variables, toutes déclarées dans `variables.tf` : `server_host`, `ssh_user`, `ssh_port`, `ssh_private_key_path` et `app_name`.
+
+`terraform apply` se lance depuis mon Mac, une seule fois, puis le réseau et le volume restent entre les déploiements.
+
+`terraform validate` confirme que la configuration est correcte :
+
+![terraform validate](../deploiement/captures/11-terraform-validate.png)
+
+`terraform apply` crée le réseau, le volume et l'inventaire, et affiche leurs noms en sortie. La capture est prise après l'application : Terraform constate que l'infrastructure correspond déjà à la configuration.
+
+![terraform apply](../deploiement/captures/13-terraform-apply.png)
+
+Un second `terraform plan` ne trouve aucune différence :
+
+![terraform plan sans changement](../deploiement/captures/12-terraform-plan-sans-changement.png)
+
+Sur le serveur, `docker volume ls` montre le volume créé par Terraform :
+
+![Volume Docker sur le serveur](../deploiement/captures/14-serveur-docker-volume.png)
+
+### 3. Ansible
+
+Ansible prépare le serveur :
+- mise à jour des paquets (`apt upgrade`) ;
+- installation de Docker Engine et du plugin Compose (`docker.io`, `docker-compose-v2`), si absents ;
+- activation du service Docker ;
+- ajout de l'utilisateur de déploiement au groupe `docker` ;
+- création du répertoire `~/deployment`.
+
+Commande : `ansible-playbook -i deploiement/ansible/inventory.ini deploiement/ansible/playbook.yml`
+
+Le playbook vérifie à la fin que Docker est actif et affiche les versions installées.
+
+Voici la première exécution : 3 tâches modifient le serveur (cache apt, paquets, répertoire de déploiement). L'installation de Docker est ignorée (`skipping`) parce qu'il est déjà présent. Il n'y a aucun échec.
+
+![Exécution du playbook Ansible](../deploiement/captures/15-ansible-playbook.png)
+
+Je relance ensuite le playbook pour vérifier qu'il peut être rejoué sans danger. Le nombre de tâches modifiées passe de 3 à 2, l'installation de Docker reste ignorée et il n'y a aucun échec.
+
+![Seconde exécution du playbook](../deploiement/captures/21-ansible-seconde-execution.png)
+
+### 4. GitLab CI/CD
+
+La pipeline est dans `deploiement/.gitlab-ci.yml`. Elle ne tourne que sur `main`, avec trois stages :
+
+**validate_tag** : vérifie que la variable `IMAGE_TAG` est présente, valide et pointe vers un tag qui existe sur Docker Hub. Le tag `latest` est interdit : il ne permet pas de savoir quelle version tourne.
+
+**deploy** (approbation manuelle) : se connecte au serveur via Tailscale + SSH. La clé SSH est stockée en base64 dans une variable GitLab masquée. Le job :
+- copie `docker-compose.yml` et les fichiers Prisma sur le serveur ;
+- crée le fichier `.env` avec les secrets (jamais versionné) ;
+- fait `docker login`, `docker compose pull` ;
+- démarre PostgreSQL, attend qu'il soit sain ;
+- applique les migrations Prisma avec un conteneur éphémère (`profil migrate`) ;
+- démarre le backend.
+
+L'approbation manuelle protège contre un déploiement accidentel.
+
+**verify** : attend que `/v1/health` réponde sur le serveur (12 tentatives, 5 s d'intervalle). En cas d'échec, affiche les 50 dernières lignes des logs du backend.
+
+Toutes les variables sensibles (secrets, tokens, identifiants, clé SSH) sont dans GitLab CI/CD Variables. Les valeurs ne s'affichent pas, ni dans les réglages, ni dans les logs. GitLab ne peut pas masquer une valeur de moins de 8 caractères : `SERVER_USER` et `DOCKERHUB_USER` sont donc seulement protégées, ce qui est acceptable pour un nom d'utilisateur. Les variables marquées `Protected` ne sont disponibles que sur les branches protégées, ici `main`, la seule branche sur laquelle la pipeline tourne.
+
+![Variables CI/CD du projet GitLab](../deploiement/captures/17-gitlab-variables.png)
+
+Voici la fin du log du job `deploy` : connexion à Docker Hub, téléchargement des images, migrations Prisma, puis démarrage des conteneurs. Les noms que GitLab a masqués apparaissent sous la forme `[MASKED]`. Sur ce déploiement, les migrations étaient déjà appliquées : Prisma indique `No pending migrations to apply`.
+
+![Log du job deploy](../deploiement/captures/18-gitlab-job-deploy.png)
+
+Les trois jobs du pipeline sont passés. Le job `deploy` a été lancé à la main avec le bouton de lecture :
+
+![Pipeline GitLab : validate_tag, deploy, verify](../deploiement/captures/16-gitlab-pipeline.png)
+
+### 5. Résultats
+
+Le déploiement fonctionne : l'API répond sur le serveur, PostgreSQL est sain, les migrations sont appliquées.
+
+L'endpoint de santé répond `UP` en environnement `production`, depuis mon navigateur, à travers Tailscale :
+
+![Endpoint /v1/health](../deploiement/captures/19-api-health.png)
+
+Sur le serveur, les deux conteneurs tournent avec la bonne image et sont `healthy` :
+
+![Conteneurs sur le serveur](../deploiement/captures/20-serveur-docker-ps.png)
+
+Deux relevés que j'ai faits en ligne de commande sur le serveur :
+
+```
+GET /v1/ready -> {"success":true,"data":{"status":"READY","database":"CONNECTED", ...}}
+
+Tables créées par les migrations : users, candidates, jobs, applications, _prisma_migrations
+```
+
+`/v1/ready` confirme que l'API est connectée à PostgreSQL.
+
+Le tag déployé est le `11` : c'est le premier build amd64 utilisable. Les builds `8` et `9` avaient été construits sur mon Mac en arm64 et ne démarrent pas sur le serveur.
+
+### 6. Reproductibilité
+
+Pour refaire le déploiement sur un autre serveur Ubuntu en amd64, il faut :
+
+1. Un serveur accessible en SSH et en Tailscale, une clé SSH de déploiement, et Terraform et Ansible sur le poste de travail.
+2. Créer `deploiement/terraform/terraform.tfvars` avec cinq valeurs : `server_host`, `ssh_user`, `ssh_port`, `ssh_private_key_path`, `app_name`.
+3. `terraform init`, `validate`, `plan`, `apply` dans `deploiement/terraform/`.
+4. `ansible-playbook -i inventory.ini playbook.yml --ask-become-pass` dans `deploiement/ansible/`.
+5. Dans GitLab, régler le fichier de pipeline sur `deploiement/.gitlab-ci.yml` et créer les dix variables CI/CD listées dans `documentation/procedure-deploiement.md`.
+6. Lancer un pipeline sur `main` avec `IMAGE_TAG` réglé sur un tag amd64 publié par Jenkins, puis cliquer sur `deploy`.
+7. Vérifier `/v1/health` et `/v1/ready`.
+
+Le détail de chaque étape, avec les erreurs rencontrées et leurs solutions, est dans `documentation/procedure-deploiement.md`. Les fichiers `terraform.tfvars`, `terraform.tfstate` et les `.env` ne sont pas dans le dépôt : ils sont à recréer.
