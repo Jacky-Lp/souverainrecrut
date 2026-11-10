@@ -26,6 +26,7 @@ variables:
     - sleep 3
     - tailscale up --authkey="$TS_AUTHKEY" --hostname="gitlab-ci-$CI_JOB_ID"
     - mkdir -p ~/.ssh && chmod 700 ~/.ssh
+    - echo "variable b64 recue, longueur=${#SSH_PRIVATE_KEY_B64} debut=${SSH_PRIVATE_KEY_B64:0:12} (attendu 532 et LS0tLS1CRUdJ)"
     - echo "$SSH_PRIVATE_KEY_B64" | tr -d ' \r\n' | base64 -d | tr -d '\r' > ~/.ssh/id_ed25519
     - sed -i -e '$a\' ~/.ssh/id_ed25519 && chmod 600 ~/.ssh/id_ed25519
     - echo "cle decodee, octets=$(wc -c < ~/.ssh/id_ed25519) lignes=$(wc -l < ~/.ssh/id_ed25519) debut=$(head -c 35 ~/.ssh/id_ed25519 | head -1) b64_longueur=${#SSH_PRIVATE_KEY_B64}"
