@@ -6,7 +6,7 @@ workflow:
     - if: $CI_COMMIT_BRANCH == "main"
 
 # Variables à définir dans GitLab (Settings > CI/CD > Variables), en "Masked" :
-#   TS_AUTHKEY (clé Tailscale éphémère), SSH_PRIVATE_KEY (type File), SERVER_TS_IP, SERVER_USER,
+#   TS_AUTHKEY (clé Tailscale éphémère), SSH_PRIVATE_KEY_B64 (clé privée en base64, sur une ligne), SERVER_TS_IP, SERVER_USER,
 #   DOCKERHUB_USER, DOCKERHUB_TOKEN, POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB, JWT_SECRET
 
 variables:
@@ -26,7 +26,8 @@ variables:
     - sleep 3
     - tailscale up --authkey="$TS_AUTHKEY" --hostname="gitlab-ci-$CI_JOB_ID"
     - mkdir -p ~/.ssh && chmod 700 ~/.ssh
-    - cp "$SSH_PRIVATE_KEY" ~/.ssh/id_ed25519 && chmod 600 ~/.ssh/id_ed25519
+    - echo "$SSH_PRIVATE_KEY_B64" | base64 -d > ~/.ssh/id_ed25519 && chmod 600 ~/.ssh/id_ed25519
+    - ssh-keygen -y -f ~/.ssh/id_ed25519 >/dev/null || (echo "Clé SSH illisible, vérifier SSH_PRIVATE_KEY_B64" && exit 1)
     - |
       cat > ~/.ssh/config <<EOF
       Host target
