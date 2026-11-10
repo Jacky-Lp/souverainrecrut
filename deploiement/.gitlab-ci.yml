@@ -26,10 +26,8 @@ variables:
     - sleep 3
     - tailscale up --authkey="$TS_AUTHKEY" --hostname="gitlab-ci-$CI_JOB_ID"
     - mkdir -p ~/.ssh && chmod 700 ~/.ssh
-    - echo "variable b64 recue, longueur=${#SSH_PRIVATE_KEY_B64} debut=${SSH_PRIVATE_KEY_B64:0:12} (attendu 532 et LS0tLS1CRUdJ)"
     - echo "$SSH_PRIVATE_KEY_B64" | tr -d ' \r\n' | base64 -d | tr -d '\r' > ~/.ssh/id_ed25519
     - sed -i -e '$a\' ~/.ssh/id_ed25519 && chmod 600 ~/.ssh/id_ed25519
-    - echo "cle decodee, octets=$(wc -c < ~/.ssh/id_ed25519) lignes=$(wc -l < ~/.ssh/id_ed25519) debut=$(head -c 35 ~/.ssh/id_ed25519 | head -1) b64_longueur=${#SSH_PRIVATE_KEY_B64}"
     - ssh-keygen -y -f ~/.ssh/id_ed25519 >/dev/null || (echo "Clé SSH illisible, vérifier SSH_PRIVATE_KEY_B64" && exit 1)
     - |
       cat > ~/.ssh/config <<EOF
@@ -58,6 +56,13 @@ deploy:
   when: manual
   environment: production
   script:
+    - |
+      manquantes=""
+      for v in DOCKERHUB_USER DOCKERHUB_TOKEN POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB JWT_SECRET SERVER_USER SERVER_TS_IP; do
+        eval "val=\${$v}"
+        [ -n "$val" ] || manquantes="$manquantes $v"
+      done
+      if [ -n "$manquantes" ]; then echo "Variables GitLab vides ou absentes :$manquantes"; exit 1; fi
     - ssh target "mkdir -p ~/deployment"
     - scp deploiement/deployment/docker-compose.yml target:~/deployment/docker-compose.yml
     - scp -r backend/prisma target:~/deployment/
