@@ -198,9 +198,17 @@ Il génère aussi l'inventaire Ansible (`deploiement/ansible/inventory.ini`) à 
 
 `terraform apply` se lance depuis mon Mac, une seule fois, puis le réseau et le volume restent entre les déploiements.
 
+`terraform init` télécharge les deux providers (`kreuzwerker/docker` et `hashicorp/local`) et fige leurs versions dans `.terraform.lock.hcl` :
+
+![terraform init](../deploiement/captures/22-terraform-init.png)
+
 `terraform validate` confirme que la configuration est correcte :
 
 ![terraform validate](../deploiement/captures/11-terraform-validate.png)
+
+`terraform plan` annonce ce que Terraform va créer : 3 ressources, le réseau, le volume et l'inventaire Ansible.
+
+![terraform plan : 3 ressources à créer](../deploiement/captures/23-terraform-plan-etat-vide.png)
 
 `terraform apply` crée le réseau, le volume et l'inventaire, et affiche leurs noms en sortie. La capture est prise après l'application : Terraform constate que l'infrastructure correspond déjà à la configuration.
 
@@ -289,7 +297,27 @@ Tables créées par les migrations : users, candidates, jobs, applications, _pri
 
 Le tag déployé est le `11` : c'est le premier build amd64 utilisable. Les builds `8` et `9` avaient été construits sur mon Mac en arm64 et ne démarrent pas sur le serveur.
 
-### 6. Reproductibilité
+### 6. Persistance des données et rollback
+
+**Persistance.** Je vérifie que les données survivent quand les conteneurs sont supprimés. Il n'y a pas de route d'inscription, et toutes les routes demandent une connexion. J'ai donc inséré un utilisateur de test directement dans PostgreSQL, puis je suis passé par l'API : connexion, puis création d'une offre. Ensuite je supprime et je recrée les conteneurs, sans l'option `-v` qui supprimerait le volume.
+
+```
+Avant   POST /v1/jobs : offre créée, id cmwbvtpmm0001qh01er0rb22t
+        GET /v1/jobs : 1 offre, "Test de persistance"
+        docker compose down : conteneurs supprimés
+        docker volume ls : souverainrecrut-postgres-data toujours présent
+        docker compose up -d : backend et postgres healthy
+Après   GET /v1/ready : READY, base CONNECTED
+        GET /v1/jobs : 1 offre, même id cmwbvtpmm0001qh01er0rb22t
+```
+
+L'offre est toujours là, avec le même identifiant : le volume conserve les données. J'ai ensuite supprimé l'offre et l'utilisateur de test. Il faut supprimer l'offre d'abord, car la base interdit de supprimer un utilisateur qui a encore des offres. La base est revenue à zéro utilisateur et zéro offre.
+
+**Rollback.** Je n'ai qu'un seul tag amd64 sur Docker Hub (le `11`). Pour tester, j'ai construit une seconde image en local (`12-test`), envoyée sur le serveur sans passer par Docker Hub. J'ai déployé le `12-test`, puis je suis revenu au `11` avec les commandes de la procédure manuelle. L'image du conteneur change puis revient à l'image d'origine, et l'API répond `UP` et `READY` à chaque étape. Le détail est dans `documentation/procedure-rollback.md`.
+
+Ce test est fait à la main sur le serveur : je n'ai pas relancé le pipeline GitLab avec un ancien `IMAGE_TAG`. Je n'ai pas automatisé le rollback : le cahier demande de le documenter et de le tester.
+
+### 7. Reproductibilité
 
 Pour refaire le déploiement sur un autre serveur Ubuntu en amd64, il faut :
 

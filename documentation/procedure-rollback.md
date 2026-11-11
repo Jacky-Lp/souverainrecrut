@@ -4,15 +4,20 @@
 
 Le rollback consiste à redéployer une version précédente de l'image du backend. Chaque image est publiée sur Docker Hub avec le numéro du build Jenkins (`11`, `12`, ...). Revenir en arrière, c'est donc redéployer l'ancien numéro.
 
-Je n'ai pas automatisé le rollback dans la pipeline. Il se fait avec la pipeline de déploiement existante, en changeant le tag. Je ne l'ai pas testé : cette procédure est documentée, pas rejouée.
+Je n'ai pas automatisé le rollback : le cahier demande de le documenter et de le tester, pas de l'automatiser. Il y a deux façons de le faire :
+
+- **sur le serveur, à la main** : c'est la procédure que j'ai testée (voir « Test du rollback ») ;
+- **avec le pipeline GitLab**, en relançant le déploiement avec l'ancien tag : elle fait la même opération, mais je ne l'ai pas rejouée.
 
 ## Choisir la version précédente
 
 Les tags sont visibles sur Docker Hub, dans le dépôt `jackylp/souverainrecrut-backend`. La version actuellement déployée est dans le fichier `.env` du serveur (`IMAGE_TAG`).
 
-Un point à vérifier avant de choisir : l'architecture de l'image. Le serveur est en amd64. Les builds `8` et `9` ont été construits sur mon Mac en arm64 : ils ne démarrent pas sur le serveur. Le premier tag utilisable est le `11`. Une version précédente utilisable n'existera qu'après le build suivant (le `12`), qui permettra de revenir au `11`.
+Un point à vérifier avant de choisir : l'architecture de l'image. Le serveur est en amd64. Les builds `8` et `9` ont été construits sur mon Mac en arm64 : ils ne démarrent pas sur le serveur. Le premier tag utilisable est le `11`. Aujourd'hui, c'est le seul tag amd64 sur Docker Hub : il n'y a pas encore de version précédente publiée. Pour le test, j'ai donc construit une seconde image en local (voir plus bas).
 
-## Procédure avec GitLab
+## Procédure avec GitLab (non rejouée)
+
+Je n'ai pas lancé cette procédure. Elle réutilise le pipeline de déploiement, qui lui a été testé.
 
 1. Dans GitLab, aller dans *Build > Pipelines*, puis *New pipeline*.
 2. Choisir la branche `main`.
@@ -23,9 +28,9 @@ Un point à vérifier avant de choisir : l'architecture de l'image. Le serveur e
 
 Le tag `latest` est refusé : il ne permet pas de savoir quelle version tourne.
 
-## Procédure manuelle sur le serveur
+## Procédure manuelle sur le serveur (testée)
 
-En cas de problème avec GitLab, je peux faire le retour à la main, en SSH :
+Je fais le retour à la main, en SSH. C'est aussi la solution si GitLab ne répond pas :
 
 ```bash
 cd ~/deployment
@@ -44,6 +49,37 @@ docker compose ps
 ```
 
 `/v1/health` doit répondre `UP`. `/v1/ready` doit répondre `READY` avec `database: CONNECTED`. Les deux conteneurs doivent être `healthy`.
+
+## Test du rollback
+
+J'ai testé la procédure manuelle sur le serveur le 11 novembre 2026. Il n'y a qu'un seul tag amd64 sur Docker Hub (le `11`), donc je n'avais pas de version précédente à restaurer. J'ai construit en local une seconde image amd64 à partir du code du dépôt, sous le tag `12-test`. Je l'ai envoyée sur le serveur avec `docker save` et `docker load`, sans la publier sur Docker Hub. Elle m'a servi de « nouvelle version ».
+
+Le test : la version `11` tourne, je passe à `12-test`, puis je reviens au `11` avec les commandes de la procédure.
+
+```
+1. Version 11 (image feb1ede52180)
+   backend et postgres healthy, /v1/health UP, /v1/ready READY (base CONNECTED)
+
+2. IMAGE_TAG=12-test, puis docker compose up -d backend
+   Container souverainrecrut-backend-1 Recreated
+   backend jackylp/souverainrecrut-backend:12-test  Up 5 seconds (healthy)
+   image du conteneur : b83f13909cf9
+   /v1/health UP, /v1/ready READY (base CONNECTED)
+
+3. Rollback : IMAGE_TAG=11, docker compose pull backend, docker compose up -d backend
+   backend jackylp/souverainrecrut-backend:11  Up 5 seconds (healthy)
+   image du conteneur : feb1ede52180
+   /v1/health UP, /v1/ready READY (base CONNECTED)
+```
+
+L'image du conteneur change (`feb1ede52180`, puis `b83f13909cf9`, puis de nouveau `feb1ede52180`) : on est bien revenu à l'image d'origine. PostgreSQL n'a pas été touché : il est resté en marche pendant tout le test, et seul le conteneur du backend a été recréé.
+
+Ce que le test ne couvre pas :
+- l'image `12-test` n'a pas été publiée sur Docker Hub, donc je n'ai pas testé le téléchargement d'une ancienne version autre que le `11` ;
+- je n'ai pas relancé le pipeline GitLab avec un ancien `IMAGE_TAG` : j'ai fait la procédure manuelle sur le serveur. Le pipeline applique la même opération, mais ce n'est pas vérifié ;
+- les deux versions avaient le même code, donc le test ne montre pas un changement de schéma de base de données.
+
+Après le test, j'ai supprimé l'image `12-test` du serveur et de mon poste, et remis `IMAGE_TAG=11`.
 
 ## Base de données
 
